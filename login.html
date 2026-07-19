@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — Espeto & Brasa</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Work+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  .login-wrap { min-height: 100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .login-card { width:100%; max-width:380px; }
+  .login-brand { font-family: var(--font-display); font-size:34px; text-align:center; margin-bottom:6px; }
+  .login-brand span { color: var(--ember); }
+  .login-sub { text-align:center; color:var(--smoke); font-size:14px; margin-bottom:28px; }
+  .field { margin-bottom:16px; }
+  .field label { display:block; font-size:13px; color:var(--smoke); margin-bottom:6px; }
+  .field input {
+    width:100%; padding:13px 14px; border-radius:10px; border:1px solid var(--line);
+    background: var(--charcoal-3); color:var(--cream); font-size:15px;
+  }
+  .field input:focus { border-color: var(--ember); outline: none; }
+  .hint { margin-top:18px; font-size:12px; color:var(--smoke); text-align:center; line-height:1.6; }
+  .error-msg { color:#ff8a7d; font-size:13px; margin-top:10px; min-height:16px; text-align:center; }
+</style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="card login-card">
+      <div class="login-brand">Espeto<span>&amp;</span>Brasa</div>
+      <div class="login-sub">Painel do garçom</div>
+      <form id="loginForm">
+        <div class="field">
+          <label for="email">E-mail</label>
+          <input id="email" type="email" autocomplete="username" required value="pedro@churras.com">
+        </div>
+        <div class="field">
+          <label for="senha">Senha</label>
+          <input id="senha" type="password" autocomplete="current-password" required value="1234">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;">Entrar</button>
+        <div class="error-msg" id="errorMsg"></div>
+      </form>
+      <div class="hint">Demo: pedro@churras.com / marina@churras.com — senha 1234</div>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="store.js"></script>
+  <script src="api.js"></script>
+  <script src="realtime.js"></script>
+  <script src="service.js"></script>
+  <script src="common.js"></script>
+  <script>
+    document.getElementById("loginForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const email = document.getElementById("email").value.trim();
+      const senha = document.getElementById("senha").value;
+      const errorMsg = document.getElementById("errorMsg");
+      errorMsg.textContent = "";
+      try {
+        const { token, garcom } = await Service.login(email, senha);
+        salvarSessaoGarcom(token, garcom);
+        window.location.href = "garcom.html";
+      } catch (err) {
+        errorMsg.textContent = "E-mail ou senha inválidos.";
+      }
+    });
+  </script>
+</body>
+</html>
