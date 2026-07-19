@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cozinha — Espeto & Brasa</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Work+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  .layout { max-width: 1400px; margin:0 auto; padding:20px; }
+  .colunas { display:grid; grid-template-columns: repeat(3, 1fr); gap:18px; }
+  @media (max-width: 900px) { .colunas { grid-template-columns: 1fr; } }
+  .coluna-titulo { font-family: var(--font-display); font-size:20px; letter-spacing:.04em; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .ticket-mesa { font-family: var(--font-display); font-size:26px; }
+  .ticket-itens { font-size:14px; line-height:1.7; }
+  .ticket-time { font-size:12px; color:var(--smoke); }
+  .ticket-actions { display:flex; gap:8px; margin-top:6px; }
+  .empty-col { color:var(--smoke); font-size:13px; text-align:center; padding:30px 10px; border:1px dashed var(--line); border-radius:12px; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">Espeto<span>&amp;</span>Brasa <span style="color:var(--smoke); font-size:16px; -webkit-text-fill-color:var(--smoke);">/ Cozinha</span></div>
+    <div id="relogio" style="font-family: var(--font-display); font-size:20px; color:var(--brass);"></div>
+  </div>
+
+  <div class="layout">
+    <div class="colunas">
+      <div>
+        <div class="coluna-titulo"><span class="dot dot-danger"></span> Criado</div>
+        <div id="colCriado" style="display:flex; flex-direction:column; gap:12px;"></div>
+      </div>
+      <div>
+        <div class="coluna-titulo"><span class="dot dot-warn"></span> Em preparo</div>
+        <div id="colPreparo" style="display:flex; flex-direction:column; gap:12px;"></div>
+      </div>
+      <div>
+        <div class="coluna-titulo"><span class="dot dot-ok"></span> Pronto</div>
+        <div id="colPronto" style="display:flex; flex-direction:column; gap:12px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-region"></div>
+
+  <script src="assets/js/config.js"></script>
+  <script src="assets/js/store.js"></script>
+  <script src="assets/js/api.js"></script>
+  <script src="assets/js/realtime.js"></script>
+  <script src="service.js"></script>
+  <script src="common.js"></script>
+  <script>
+    function ticketHtml(p, coluna) {
+      const proximo = { CRIADO: "EM_PREPARO", EM_PREPARO: "PRONTO" }[p.status];
+      const proximoLabel = { EM_PREPARO: "Iniciar preparo", PRONTO: "Marcar como pronto" }[proximo];
+      return `
+        <div class="ticket ${p.status.toLowerCase()}">
+          <div style="display:flex; justify-content:space-between; align-items:baseline;">
+            <span class="ticket-mesa">Mesa ${p.mesaNumero}</span>
+            <span class="ticket-time">${new Date(p.horario).toLocaleTimeString("pt-BR", {hour:'2-digit', minute:'2-digit'})}</span>
+          </div>
+          <div class="ticket-itens">
+            ${p.itens.filter(i => !i.cancelado).map((i) => `${i.quantidade}x ${i.nome}${i.observacao ? ` <span style="color:var(--smoke);">(${i.observacao})</span>` : ""}`).join("<br>")}
+          </div>
+          ${proximo ? `<div class="ticket-actions"><button class="btn btn-primary" style="flex:1;" onclick="avancarStatus(${p.id}, '${proximo}')">${proximoLabel}</button></div>` : `<div class="badge badge-ok" style="align-self:flex-start;">Pronto — aguardando retirada</div>`}
+        </div>`;
+    }
+
+    async function carregar() {
+      const pedidos = await Service.listarPedidosCozinha();
+      const criado = pedidos.filter((p) => p.status === "CRIADO");
+      const preparo = pedidos.filter((p) => p.status === "EM_PREPARO");
+      const pronto = pedidos.filter((p) => p.status === "PRONTO");
+
+      document.getElementById("colCriado").innerHTML = criado.length ? criado.map((p) => ticketHtml(p)).join("") : `<div class="empty-col">Sem pedidos novos</div>`;
+      document.getElementById("colPreparo").innerHTML = preparo.length ? preparo.map((p) => ticketHtml(p)).join("") : `<div class="empty-col">Nada em preparo</div>`;
+      document.getElementById("colPronto").innerHTML = pronto.length ? pronto.map((p) => ticketHtml(p)).join("") : `<div class="empty-col">Nada pronto ainda</div>`;
+    }
+
+    async function avancarStatus(pedidoId, novoStatus) {
+      await Service.atualizarStatusPedido(pedidoId, novoStatus);
+      if (novoStatus === "PRONTO") toast("Garçom notificado: pedido pronto!");
+      carregar();
+    }
+
+    Realtime.on("pedido:novo", (p) => { tocarAlerta("chamado"); toast(`Novo pedido — Mesa ${p.mesaNumero}`); carregar(); });
+    Realtime.on("pedido:atualizado", carregar);
+
+    function tickRelogio() {
+      document.getElementById("relogio").textContent = new Date().toLocaleTimeString("pt-BR", { hour: '2-digit', minute: '2-digit' });
+    }
+    setInterval(tickRelogio, 1000);
+    tickRelogio();
+
+    carregar();
+  </script>
+</body>
+</html>

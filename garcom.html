@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel do Garçom — Espeto & Brasa</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Work+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  .layout { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  .tabs { display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap; }
+  .tab-btn {
+    padding:10px 18px; border-radius:999px; border:1px solid var(--line); background:var(--charcoal-2);
+    color:var(--smoke); font-weight:600; cursor:pointer; font-size:14px; position:relative;
+  }
+  .tab-btn.active { background:var(--ember); color:#1a0f08; border-color:var(--ember); }
+  .tab-count {
+    display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px;
+    background:var(--danger); color:#fff; border-radius:999px; font-size:11px; padding:0 5px; margin-left:6px;
+  }
+  .grid-mesas { display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:14px; }
+  .mesa-status-label { font-size:12px; color:var(--smoke); text-transform:uppercase; letter-spacing:.05em; }
+  .chamado-card { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+  .chamado-left { display:flex; align-items:center; gap:14px; }
+  .comanda-item-row { display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line); gap:10px; }
+  .produto-row { display:flex; align-items:center; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--line); gap:10px; }
+  .produto-row:last-child { border-bottom:none; }
+  .cat-scroll { display:flex; gap:8px; overflow-x:auto; padding-bottom:10px; margin-bottom:6px; }
+  .totais-box { background:var(--charcoal-3); border-radius:12px; padding:14px 16px; margin-top:14px; }
+  .totais-row { display:flex; justify-content:space-between; font-size:14px; padding:4px 0; color:var(--smoke); }
+  .totais-row.final { color:var(--cream); font-size:19px; font-weight:800; padding-top:10px; border-top:1px solid var(--line); margin-top:6px; }
+  .empty-state { text-align:center; color:var(--smoke); padding:50px 20px; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">Espeto<span>&amp;</span>Brasa</div>
+    <div style="display:flex; align-items:center; gap:14px;">
+      <span id="garcomNome" style="font-size:14px; color:var(--smoke);"></span>
+      <button class="btn btn-outline" onclick="logoutGarcom()">Sair</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="mesas" onclick="mudarTab('mesas')">Mesas</button>
+      <button class="tab-btn" data-tab="chamados" onclick="mudarTab('chamados')">Chamados <span class="tab-count" id="badgeChamados" style="display:none;">0</span></button>
+      <button class="tab-btn" data-tab="comandas" onclick="mudarTab('comandas')">Comandas Ativas</button>
+    </div>
+
+    <div id="tab-mesas"><div class="grid-mesas" id="gridMesas"></div></div>
+    <div id="tab-chamados" style="display:none;"><div id="listaChamados" style="display:flex; flex-direction:column; gap:12px;"></div></div>
+    <div id="tab-comandas" style="display:none;"><div id="listaComandas" style="display:flex; flex-direction:column; gap:12px;"></div></div>
+  </div>
+
+  <div id="modalRoot"></div>
+  <div id="toast-region"></div>
+
+  <script src="assets/js/config.js"></script>
+  <script src="assets/js/store.js"></script>
+  <script src="assets/js/api.js"></script>
+  <script src="assets/js/realtime.js"></script>
+  <script src="assets/js/service.js"></script>
+  <script src="assets/js/common.js"></script>
+  <script>
+    const garcom = exigirGarcomLogado();
+    if (garcom) document.getElementById("garcomNome").textContent = garcom.nome;
+
+    let mesas = [], chamados = [], comandasAtivas = [], categorias = [];
+    let comandaAtual = null;        // comanda sendo editada no modal
+    let carrinho = {};              // { produtoId: {produto, qtd, obs} } — itens a enviar no próximo pedido
+    let categoriaAtiva = null;
+
+    async function carregarTudo() {
+      [mesas, chamados, comandasAtivas, categorias] = await Promise.all([
+        Service.listarMesas(),
+        Service.listarAtendimentos(),
+        Service.listarComandasAtivas(),
+        Service.listarCategorias(),
+      ]);
+      renderMesas();
+      renderChamados();
+      renderComandas();
+    }
+
+    function mudarTab(tab) {
+      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+      ["mesas", "chamados", "comandas"].forEach((t) => {
+        document.getElementById(`tab-${t}`).style.display = t === tab ? "block" : "none";
+      });
+    }
+
+    // ---------------- MESAS ----------------
+    function statusClasseMesa(mesa) {
+      const at = chamados.find((a) => a.mesaId === mesa.id && a.status !== "FINALIZADO");
+      if (at) return nivelEspera(at.horario) === "danger" ? "urgente" : "aguardando";
+      if (mesa.status === "LIVRE") return "livre";
+      if (mesa.status === "INTERDITADA") return "interditada";
+      return "ocupada";
+    }
+
+    function renderMesas() {
+      const grid = document.getElementById("gridMesas");
+      grid.innerHTML = mesas.map((m) => {
+        const classe = statusClasseMesa(m);
+        const labels = { livre: "Livre", ocupada: "Ocupada", aguardando: "Chamando", urgente: "Urgente", interditada: "Interditada" };
+        return `
+          <div class="mesa-card ${classe}" onclick="abrirMesa(${m.id})">
+            <div class="mesa-numero">${m.numero}</div>
+            <div class="mesa-status-label">${labels[classe]}</div>
+          </div>`;
+      }).join("");
+    }
+
+    async function abrirMesa(mesaId) {
+      const mesa = mesas.find((m) => m.id === mesaId);
+      let comanda = await Service.buscarComandaAbertaDaMesa(mesaId);
+      if (!comanda) {
+        comanda = await Service.abrirComanda(mesaId, garcom.id, garcom.nome);
+      }
+      abrirComandaModal(comanda.id);
+    }
+
+    // ---------------- CHAMADOS ----------------
+    function renderChamados() {
+      const ativos = chamados.filter((a) => a.status !== "FINALIZADO");
+      const badge = document.getElementById("badgeChamados");
+      const aguardando = ativos.filter((a) => a.status === "AGUARDANDO").length;
+      badge.style.display = aguardando > 0 ? "inline-flex" : "none";
+      badge.textContent = aguardando;
+
+      const lista = document.getElementById("listaChamados");
+      if (ativos.length === 0) {
+        lista.innerHTML = `<div class="empty-state">Nenhum chamado no momento. Tudo tranquilo por aqui. 🔥</div>`;
+        return;
+      }
+      lista.innerHTML = ativos.map((a) => {
+        const nivel = nivelEspera(a.horario);
+        const dotClasse = a.status === "EM_ATENDIMENTO" ? "dot-warn" : (nivel === "danger" ? "dot-danger" : nivel === "warn" ? "dot-warn" : "dot-ok");
+        return `
+        <div class="card chamado-card ${a.status === "AGUARDANDO" && nivel === "danger" ? "pulse-danger" : ""}">
+          <div class="chamado-left">
+            <span class="dot ${dotClasse}"></span>
+            <div>
+              <div style="font-family:var(--font-display); font-size:22px;">Mesa ${a.mesaNumero}</div>
+              <div style="font-size:13px; color:var(--smoke);">
+                ${a.status === "AGUARDANDO" ? `Aguardando há ${tempoEsperaLabel(a.horario)}` : `Em atendimento — ${a.garcomNome}`}
+              </div>
+            </div>
+          </div>
+          ${a.status === "AGUARDANDO"
+            ? `<button class="btn btn-primary" onclick="aceitarChamado(${a.id})">Assumir</button>`
+            : a.garcomId === garcom.id
+              ? `<button class="btn btn-outline" onclick="concluirChamado(${a.id})">Concluir</button>`
+              : `<span class="badge badge-neutral">Com ${a.garcomNome}</span>`
+          }
+        </div>`;
+      }).join("");
+    }
+
+    async function aceitarChamado(id) {
+      await Service.assumirAtendimento(id, garcom.id, garcom.nome);
+      toast("Chamado assumido. Boa sorte! 🍢");
+      await carregarTudo();
+      const at = chamados.find((a) => a.id === id);
+      if (at) abrirMesa(at.mesaId);
+    }
+    async function concluirChamado(id) {
+      await Service.finalizarAtendimento(id);
+      toast("Atendimento concluído.");
+      carregarTudo();
+    }
+
+    // ---------------- COMANDAS ATIVAS ----------------
+    async function renderComandas() {
+      const lista = document.getElementById("listaComandas");
+      if (comandasAtivas.length === 0) {
+        lista.innerHTML = `<div class="empty-state">Nenhuma comanda aberta agora.</div>`;
+        return;
+      }
+      const totais = await Promise.all(comandasAtivas.map((c) => calcularTotalComanda(c.id)));
+      lista.innerHTML = comandasAtivas.map((c, idx) => `
+        <div class="card" style="display:flex; align-items:center; justify-content:space-between; cursor:pointer;" onclick="abrirComandaModal(${c.id})">
+          <div>
+            <div style="font-family:var(--font-display); font-size:22px;">Mesa ${c.mesaNumero}</div>
+            <div style="font-size:13px; color:var(--smoke);">Aberta às ${new Date(c.abertura).toLocaleTimeString("pt-BR", {hour:'2-digit', minute:'2-digit'})} · ${c.garcomNome}</div>
+          </div>
+          <div style="font-family:var(--font-display); font-size:22px; color:var(--brass);">${formatBRL(totais[idx])}</div>
+        </div>`).join("");
+    }
+
+    async function calcularTotalComanda(comandaId) {
+      const pedidos = await Service.listarPedidosDaComanda(comandaId);
+      return pedidos.reduce((sum, p) => sum + p.itens.filter(i => !i.cancelado).reduce((s, i) => s + i.quantidade * i.precoUnitario, 0), 0);
+    }
+
+    // ---------------- MODAL DE COMANDA ----------------
+    async function abrirComandaModal(comandaId) {
+      comandaAtual = await Service.buscarComanda(comandaId);
+      carrinho = {};
+      categoriaAtiva = categorias[0] ? categorias[0].id : null;
+      renderModal();
+    }
+
+    function fecharModal() { document.getElementById("modalRoot").innerHTML = ""; comandaAtual = null; carregarTudo(); }
+
+    async function renderModal() {
+      if (!comandaAtual) return;
+      const pedidos = await Service.listarPedidosDaComanda(comandaAtual.id);
+      const totalAtual = pedidos.reduce((sum, p) => sum + p.itens.filter(i => !i.cancelado).reduce((s, i) => s + i.quantidade * i.precoUnitario, 0), 0);
+      const carrinhoItens = Object.values(carrinho);
+      const totalCarrinho = carrinhoItens.reduce((s, it) => s + it.qtd * it.produto.preco, 0);
+
+      document.getElementById("modalRoot").innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) fecharModal()">
+          <div class="modal-panel">
+            <div style="padding:20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
+              <div>
+                <div style="font-family:var(--font-display); font-size:26px;">Mesa ${comandaAtual.mesaNumero}</div>
+                <div style="font-size:12px; color:var(--smoke);">Comanda #${comandaAtual.id} · ${comandaAtual.garcomNome}</div>
+              </div>
+              <button class="btn-icon" onclick="fecharModal()">✕</button>
+            </div>
+
+            <div style="padding:20px;">
+              <div class="cat-scroll">
+                ${categorias.map((c) => `<div class="chip ${c.id === categoriaAtiva ? "active" : ""}" onclick="selecionarCategoria(${c.id})">${c.nome}</div>`).join("")}
+              </div>
+
+              <div id="produtosLista"></div>
+
+              ${carrinhoItens.length > 0 ? `
+                <div class="totais-box">
+                  <div style="font-size:13px; color:var(--smoke); margin-bottom:6px;">Novo pedido</div>
+                  ${carrinhoItens.map((it) => `<div class="totais-row"><span>${it.qtd}x ${it.produto.nome}</span><span>${formatBRL(it.qtd * it.produto.preco)}</span></div>`).join("")}
+                  <div class="totais-row final"><span>Subtotal</span><span>${formatBRL(totalCarrinho)}</span></div>
+                </div>
+                <button class="btn btn-primary" style="width:100%; margin-top:12px;" onclick="enviarPedido()">Enviar pedido para a cozinha</button>
+              ` : ""}
+
+              ${pedidos.length > 0 ? `
+                <div style="margin-top:26px;">
+                  <div style="font-family:var(--font-display); font-size:18px; margin-bottom:8px; color:var(--brass);">Pedidos da comanda</div>
+                  ${pedidos.map((p) => `
+                    <div class="card" style="margin-bottom:10px;">
+                      <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                        <span style="font-size:12px; color:var(--smoke);">${new Date(p.horario).toLocaleTimeString("pt-BR", {hour:'2-digit', minute:'2-digit'})}</span>
+                        <span class="badge ${p.status === 'PRONTO' ? 'badge-ok' : p.status === 'CANCELADO' ? 'badge-danger' : 'badge-warn'}">${p.status.replace('_',' ')}</span>
+                      </div>
+                      ${p.itens.map((i) => `
+                        <div class="comanda-item-row" style="${i.cancelado ? 'opacity:.4; text-decoration:line-through;' : ''}">
+                          <span>${i.quantidade}x ${i.nome}${i.observacao ? ` <em style="color:var(--smoke); font-style:normal; font-size:12px;">(${i.observacao})</em>` : ""}</span>
+                          <span style="display:flex; align-items:center; gap:10px;">
+                            ${formatBRL(i.quantidade * i.precoUnitario)}
+                            ${!i.cancelado ? `<button class="btn-icon" style="width:28px;height:28px;font-size:13px;" onclick="cancelarItem(${i.id})">✕</button>` : ""}
+                          </span>
+                        </div>`).join("")}
+                    </div>`).join("")}
+                </div>
+              ` : ""}
+
+              <div class="totais-box">
+                <div class="totais-row final"><span>Total da comanda</span><span>${formatBRL(totalAtual)}</span></div>
+              </div>
+
+              <button class="btn btn-brass" style="width:100%; margin-top:14px;" onclick="abrirFechamento(${totalAtual})">Fechar comanda</button>
+            </div>
+          </div>
+        </div>
+      `;
+      renderProdutos();
+    }
+
+    function selecionarCategoria(id) { categoriaAtiva = id; renderModal(); }
+
+    function renderProdutos() {
+      const cat = categorias.find((c) => c.id === categoriaAtiva);
+      const el = document.getElementById("produtosLista");
+      if (!cat || !el) return;
+      el.innerHTML = cat.produtos.map((p) => {
+        const item = carrinho[p.id];
+        const qtd = item ? item.qtd : 0;
+        return `
+          <div class="produto-row">
+            <div>
+              <div style="font-weight:600;">${p.nome}</div>
+              <div style="font-size:13px; color:var(--smoke);">${formatBRL(p.preco)}</div>
+            </div>
+            <div class="qty-stepper">
+              <button class="qty-btn" onclick="alterarQtd(${p.id}, -1)">−</button>
+              <span style="min-width:18px; text-align:center;">${qtd}</span>
+              <button class="qty-btn" onclick="alterarQtd(${p.id}, 1)">+</button>
+            </div>
+          </div>`;
+      }).join("");
+    }
+
+    function alterarQtd(produtoId, delta) {
+      const cat = categorias.find((c) => c.produtos.some((p) => p.id === produtoId));
+      const produto = cat.produtos.find((p) => p.id === produtoId);
+      const atual = carrinho[produtoId] ? carrinho[produtoId].qtd : 0;
+      const nova = Math.max(0, atual + delta);
+      if (nova === 0) delete carrinho[produtoId];
+      else carrinho[produtoId] = { produto, qtd: nova, obs: carrinho[produtoId] ? carrinho[produtoId].obs : "" };
+      renderModal();
+    }
+
+    async function enviarPedido() {
+      const itens = Object.entries(carrinho).map(([produtoId, it]) => ({
+        produtoId: Number(produtoId), quantidade: it.qtd, observacao: it.obs || "",
+      }));
+      if (itens.length === 0) return;
+      await Service.criarPedido(comandaAtual.id, itens);
+      carrinho = {};
+      toast("Pedido enviado para a cozinha 🔥");
+      renderModal();
+    }
+
+    async function cancelarItem(itemId) {
+      await Service.cancelarItemPedido(itemId);
+      renderModal();
+    }
+
+    function abrirFechamento(totalAtual) {
+      const comTaxa = totalAtual * (1 + window.APP_CONFIG.TAXA_SERVICO);
+      document.getElementById("modalRoot").insertAdjacentHTML("beforeend", `
+        <div class="modal-backdrop" id="fechamentoModal" onclick="if(event.target===this) this.remove()">
+          <div class="modal-panel" style="max-width:420px;">
+            <div style="padding:24px;">
+              <div style="font-family:var(--font-display); font-size:24px; margin-bottom:16px;">Fechar comanda — Mesa ${comandaAtual.mesaNumero}</div>
+              <div class="totais-box">
+                <div class="totais-row"><span>Subtotal</span><span>${formatBRL(totalAtual)}</span></div>
+                <div class="totais-row"><span>Taxa de serviço (10%)</span><span id="taxaValor">${formatBRL(totalAtual * 0.10)}</span></div>
+                <div class="totais-row final"><span>Total</span><span id="totalFinal">${formatBRL(comTaxa)}</span></div>
+              </div>
+              <label style="display:flex; align-items:center; gap:8px; margin:14px 0; font-size:14px;">
+                <input type="checkbox" id="taxaCheck" checked onchange="atualizarTaxaPreview(${totalAtual})">
+                Incluir taxa de serviço de 10%
+              </label>
+              <div style="display:flex; gap:10px;">
+                <button class="btn btn-outline" style="flex:1;" onclick="document.getElementById('fechamentoModal').remove()">Cancelar</button>
+                <button class="btn btn-primary" style="flex:1;" onclick="confirmarFechamento()">Confirmar pagamento</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `);
+    }
+
+    function atualizarTaxaPreview(totalAtual) {
+      const incluir = document.getElementById("taxaCheck").checked;
+      document.getElementById("taxaValor").textContent = incluir ? formatBRL(totalAtual * 0.10) : formatBRL(0);
+      document.getElementById("totalFinal").textContent = formatBRL(incluir ? totalAtual * 1.10 : totalAtual);
+    }
+
+    async function confirmarFechamento() {
+      const taxa = document.getElementById("taxaCheck").checked;
+      await Service.fecharComanda(comandaAtual.id, taxa);
+      await Service.finalizarPagamentoComanda(comandaAtual.id);
+      document.getElementById("fechamentoModal").remove();
+      toast("Comanda finalizada. Mesa liberada.");
+      fecharModal();
+    }
+
+    // ---------------- TEMPO REAL ----------------
+    Realtime.on("atendimento:novo", (at) => {
+      tocarAlerta("chamado");
+      toast(`Mesa ${at.mesaNumero} está chamando o garçom!`);
+      carregarTudo();
+    });
+    Realtime.on("atendimento:atualizado", carregarTudo);
+    Realtime.on("pedido:novo", carregarTudo);
+    Realtime.on("pedido:atualizado", (p) => {
+      if (p && p.status === "PRONTO") {
+        tocarAlerta("pronto");
+        toast(`Pedido da Mesa ${p.mesaNumero} está pronto!`);
+      }
+      carregarTudo();
+    });
+    Realtime.on("comanda:nova", carregarTudo);
+    Realtime.on("comanda:atualizada", carregarTudo);
+
+    // Atualiza os "há X minutos" periodicamente sem refazer todas as chamadas
+    setInterval(() => { renderChamados(); renderMesas(); }, 15000);
+
+    carregarTudo();
+  </script>
+</body>
+</html>
